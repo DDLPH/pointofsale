@@ -57,5 +57,7 @@ node tests/integration.mjs
 ทดสอบ auth, role, shared data, cash/transfer, duplicate concurrent submit, validation, price snapshot, cancellation, user creation/disabling, forged/revoked sessions, login rate limiting
 
 ## ขอบเขต
+ส่งสรุปรายวันไป Google Sheets จากหน้ายอดขายได้เฉพาะแอดมิน หลังตั้งค่าตาม `integrations/google-sheets/README.md` เลือกวันที่แล้วกดส่งด้วยตนเอง วันที่เดิมอัปเดตแถวเดิม หากยกเลิกบิลย้อนหลังให้ส่งวันนั้นใหม่ รายละเอียดบิลยังเก็บใน D1 ไม่มีการสมัครบริการเสียเงินหรือเปิด billing เพิ่ม
+
 ต้องใช้อินเทอร์เน็ต ไม่มีสต็อก QR ตรวจโอนอัตโนมัติ หรือใบกำกับภาษี ข้อมูลจริงอยู่บน D1. บิลร่างในแท็บอยู่ใน sessionStorage และอาจหายเมื่อปิดแท็บ ส่งออก JSON สำรองได้ ยังไม่มีหน้ากู้คืนไฟล์ โหลดประวัติทั้งหมด ยังไม่มี pagination สำหรับจำนวนบิลมหาศาล
 เว็บต้องเปิด audience เป็น public เพื่อให้เข้าหน้าล็อกอินได้ แต่ข้อมูลร้านต้องผ่านบัญชีร้านเสมอ ไม่มีการพึ่ง identity headers ของ ChatGPT สำหรับสิทธิ์ POS อีกต่อไป
