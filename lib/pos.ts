@@ -1,0 +1,8 @@
+export type Product = {id:string; name:string; price:number; category:string; active:number};
+export type Line = {productId:string; name:string; price:number; qty:number; note:string};
+export type Order = {id:string; created:string; total:number; method:'cash'|'transfer'; received:number; items:Line[]; cancelled:string|null; reason:string|null};
+export const money = (n:number) => new Intl.NumberFormat('th-TH',{style:'currency',currency:'THB',maximumFractionDigits:2}).format(n/100);
+export const dayKey = (date = new Date()) => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
+export function satang(value:string):number { if(!/^\d+(\.\d{1,2})?$/.test(value)) throw new Error('กรุณาระบุจำนวนเงินให้ถูกต้อง'); const [baht, cents='']=value.split('.');const result=Number(baht)*100+Number(cents.padEnd(2,'0')); if(!Number.isSafeInteger(result)||result>100000000) throw new Error('จำนวนเงินเกินขอบเขต');return result; }
+export const noodles=['บะหมี่','เส้นเล็ก','วุ้นเส้น','เส้นหมี่','เส้นมาม่า'];
+export const menuSeed = ['ก๋วยเตี๋ยวหมู น้ำใส','ก๋วยเตี๋ยวหมู ต้มยำ','ก๋วยเตี๋ยวไก่','ก๋วยเตี๋ยวไก่ น้ำต้มยำ'].flatMap((name,i)=>[{id:`10000000-0000-4000-8000-${String(i*2+1).padStart(12,'0')}`,name:`${name} ธรรมดา`,price:3500,category:i<2?'ก๋วยเตี๋ยวหมู':'ก๋วยเตี๋ยวไก่',active:1},{id:`10000000-0000-4000-8000-${String(i*2+2).padStart(12,'0')}`,name:`${name} พิเศษ`,price:4500,category:i<2?'ก๋วยเตี๋ยวหมู':'ก๋วยเตี๋ยวไก่',active:1}]).concat([{id:'10000000-0000-4000-8000-000000000009',name:'เกาเหลาไก่',price:5000,category:'เกาเหลา',active:1},{id:'10000000-0000-4000-8000-000000000010',name:'เกาเหลาหมู',price:5000,category:'เกาเหลา',active:1}]);
