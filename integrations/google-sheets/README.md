@@ -1,21 +1,17 @@
-# Google Sheets daily summary
+# Private Google Sheets daily summaries
 
-The admin selects a date in the POS report and clicks **ส่งสรุปไป Google Sheets**. This is a manual export, not a scheduled job. Re-export after cancelling an old bill to update that date. D1 remains the primary record of every bill.
+The sheet owner opens Google Sheets on a computer and chooses **ยอดขายร้าน > ดึงสรุปวันนี้** or **ดึงสรุปตามวันที่**. No Apps Script web app deployment is needed. No doGet/doPost public entry points exist. This is manual, not scheduled; re-pull a date after cancelling an older bill.
 
-The server calculates totals for 00:00–24:00 Asia/Bangkok from D1, excluding cancelled bills from revenue. It sends only date, paid bill count, cash/transfer revenue, cancelled count and snapshot timestamp. Amounts are integer satang in transit and baht in the sheet. The Apps Script upserts one row per date under a script lock and rejects older exports. The request is signed with HMAC-SHA256 and expires after five minutes.
+The bound script sends an HMAC-SHA256 signed read request to the POS over HTTPS. The signature covers the fixed spreadsheet ID, action, date and five-minute timestamp. The dedicated key grants access only to daily aggregates. It cannot list bills, change menus or create/cancel sales. D1 remains the primary record of bills. One row per Bangkok calendar day is upserted under a script lock; stale responses are rejected. Satang is converted to baht only for spreadsheet display.
 
-## One-time setup by the sheet owner
+## Setup
+1. Copy Code.gs into the bound Apps Script project. Keep it unpublished.
+2. The owner runs setup once, then reloads the sheet. Existing WEBHOOK_SECRET is reused; a new installation generates it in Script Properties.
+3. Store the same value as the POS server secret GOOGLE_SHEETS_PULL_SECRET and publish the POS. Never put it in GitHub or spreadsheet cells. Anyone who can edit the bound script can read its properties, so only trusted shop administrators should have sheet edit access.
+4. On the first pull, Google asks the owner to authorize spreadsheet access and external requests to the POS. Approve in the Google UI. This does not enable billing or require a paid Google Workspace account.
 
-1. Copy `Code.gs` into the bound Apps Script project of the destination sheet.
-2. Run `setup` and authorize its spreadsheet access. This creates the **สรุปรายวัน** tab and a random `WEBHOOK_SECRET` in Script Properties. Do not publish the secret or commit it. Re-running setup preserves it.
-3. In Apps Script, deploy a **Web app**, execute as the owner, access **Anyone**. Only correctly signed POST requests can write; there is no public read endpoint. This does not require purchasing Google Workspace or enabling Google Cloud billing.
-4. Copy the `/exec` deployment URL to the POS server environment `GOOGLE_SHEETS_WEBHOOK_URL`. Copy the Script Property `WEBHOOK_SECRET` to the secret environment variable `GOOGLE_SHEETS_WEBHOOK_SECRET`. Apply through Sites runtime configuration, then publish the saved POS version.
-5. Test a daily export, export the same day twice and confirm one row. Never enter test sales into the live store solely to test the integration.
+The custom menu is available in the desktop web editor; Google Sheets mobile apps do not support this custom menu. The POS itself remains usable on mobile.
 
-The provided spreadsheet ID is fixed in both components; changing destination requires updating both. Keep the destination sheet restricted to appropriate shop users: its sharing permissions control who can read exported sales and who can edit its bound script. Keep column headers and the hidden timestamp column unchanged.
+Tests: node tests/daily-summary.mjs; node tests/sheets-access.mjs (local TEST_PULL_SECRET configured); TypeScript and production build.
 
-Apps Script has daily quotas and execution limits; failures show a retryable error in the POS rather than reporting success. No paid services or automatic billing are configured by this integration.
-
-Validation: `node tests/daily-summary.mjs` and `node node_modules/typescript/bin/tsc --noEmit`.
-
-Google references: https://developers.google.com/apps-script/guides/web and https://developers.google.com/apps-script/guides/services/quotas
+References: https://developers.google.com/apps-script/reference/url-fetch/url-fetch-app and https://developers.google.com/apps-script/guides/services/quotas

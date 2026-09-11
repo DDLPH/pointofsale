@@ -1,9 +1,14 @@
-// Daily totals only. No bill details or user credentials are sent to this spreadsheet.
 const SHEET_ID = '1mrVY7T86UcGvm0IYm-0LqvYF5OO9yAWjCCjWMKQF2Z0';
 const TAB_NAME = 'สรุปรายวัน';
 const HEADERS = ['วันที่', 'บิลที่ชำระแล้ว', 'เงินสด (บาท)', 'เงินโอน (บาท)', 'ยอดขายสุทธิ (บาท)', 'บิลยกเลิก', 'อัปเดตล่าสุด (เวลาไทย)', 'เวลาสรุป (ระบบ)'];
 
-// The owner runs this once and keeps the generated key private in Script Properties.
+const POS_URL = 'https://chicken-noodle-pos-demmy.dem-290747.chatgpt.site/api/reports/sheets';
+
+// Bound script only. Do not deploy a web app. Retains the existing private key.
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('ยอดขายร้าน').addItem('ดึงสรุปวันนี้', 'pullToday').addItem('ดึงสรุปตามวันที่', 'pullDate').addToUi();
+}
+
 function setup() {
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('WEBHOOK_SECRET')) props.setProperty('WEBHOOK_SECRET', Utilities.getUuid() + Utilities.getUuid());
@@ -16,40 +21,49 @@ function setup() {
   sheet.setColumnWidths(2, 5, 150);
   sheet.setColumnWidth(7, 200);
   sheet.hideColumns(8);
-  console.log('พร้อมเชื่อมต่อ: คีย์อยู่ใน Project Settings > Script Properties > WEBHOOK_SECRET');
+  onOpen();
 }
 
-function reply_(value) {
-  return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);
+function pullToday() {
+  showResult_(Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd'));
 }
 
-function doPost(e) {
-  let lock;
+function pullDate() {
+  const ui = SpreadsheetApp.getUi();
+  const answer = ui.prompt('ดึงสรุปรายวัน', 'กรอกวันที่ ค.ศ. เช่น 2026-09-11', ui.ButtonSet.OK_CANCEL);
+  if (answer.getSelectedButton() !== ui.Button.OK) return;
+  showResult_(answer.getResponseText().trim());
+}
+
+function showResult_(date) {
+  const ui = SpreadsheetApp.getUi();
   try {
-    const raw = e && e.postData && e.postData.contents;
-    if (!raw || raw.length > 4096) return reply_({ ok: false, error: 'invalid' });
-    const body = JSON.parse(raw);
-    const secret = PropertiesService.getScriptProperties().getProperty('WEBHOOK_SECRET');
-    if (!secret || typeof body.payload !== 'string' || !/^[0-9a-f]{64}$/.test(body.signature)) return reply_({ ok: false, error: 'unauthorized' });
-    const expected = Utilities.computeHmacSha256Signature(body.payload, secret, Utilities.Charset.UTF_8).map(b => ('0' + ((b + 256) % 256).toString(16)).slice(-2)).join('');
-    let difference = 0;
-    for (let i = 0; i < 64; i++) difference |= expected.charCodeAt(i) ^ body.signature.charCodeAt(i);
-    if (difference) return reply_({ ok: false, error: 'unauthorized' });
-    const p = JSON.parse(body.payload);
-    if (p.version !== 1 || p.sheetId !== SHEET_ID || typeof p.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(p.date) || p.date < '2000-01-01' || p.date > '2100-12-31') return reply_({ ok: false, error: 'invalid' });
-    if (new Date(p.date + 'T00:00:00Z').toISOString().slice(0, 10) !== p.date) return reply_({ ok: false, error: 'invalid' });
-    if (!Number.isSafeInteger(p.snapshotAt) || Math.abs(Date.now() - p.snapshotAt) > 300000) return reply_({ ok: false, error: 'expired' });
-    if (!['bills', 'cancelled', 'cash', 'transfer', 'total'].every(k => Number.isSafeInteger(p[k]) && p[k] >= 0) || p.total !== p.cash + p.transfer) return reply_({ ok: false, error: 'invalid' });
-    lock = LockService.getScriptLock();
-    if (!lock.tryLock(10000)) return reply_({ ok: false, error: 'busy' });
+    const p = pullSummary_(date);
+    ui.alert('อัปเดตวันที่ ' + p.date + ' แล้ว: ' + p.bills + ' บิล รวม ' + (p.total / 100).toFixed(2) + ' บาท');
+  } catch (error) { ui.alert('ยังไม่อัปเดตสรุป: ' + error.message); }
+}
+
+function pullSummary_(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < '2000-01-01' || date > '2100-12-31' || new Date(date + 'T00:00:00Z').toISOString().slice(0, 10) !== date) throw new Error('วันที่ไม่ถูกต้อง');
+  const secret = PropertiesService.getScriptProperties().getProperty('WEBHOOK_SECRET');
+  if (!secret) throw new Error('ยังไม่มีคีย์เชื่อมต่อ');
+  const payload = JSON.stringify({ action: 'read_daily_summary', sheetId: SHEET_ID, date: date, timestamp: Date.now() });
+  const signature = Utilities.computeHmacSha256Signature(payload, secret, Utilities.Charset.UTF_8).map(b => ('0' + ((b + 256) % 256).toString(16)).slice(-2)).join('');
+  const response = UrlFetchApp.fetch(POS_URL, { method: 'post', contentType: 'application/json', payload: JSON.stringify({ payload: payload, signature: signature }), muteHttpExceptions: true, followRedirects: false });
+  if (response.getResponseCode() !== 200) throw new Error('เชื่อม POS ไม่สำเร็จ กรุณาลองใหม่หรือตรวจคีย์เชื่อมต่อ');
+  const p = JSON.parse(response.getContentText());
+  if (!p.ok || p.version !== 1 || p.sheetId !== SHEET_ID || p.date !== date || !Number.isSafeInteger(p.snapshotAt) || Math.abs(Date.now() - p.snapshotAt) > 300000 || !['bills', 'cancelled', 'cash', 'transfer', 'total'].every(k => Number.isSafeInteger(p[k]) && p[k] >= 0) || p.total !== p.cash + p.transfer) throw new Error('ข้อมูลตอบกลับไม่ถูกต้อง');
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) throw new Error('กำลังอัปเดตสรุปอยู่ กรุณาลองใหม่');
+  try {
     const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(TAB_NAME);
-    if (!sheet || sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0].join('|') !== HEADERS.join('|')) return reply_({ ok: false, error: 'setup_required' });
+    if (!sheet || sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0].join('|') !== HEADERS.join('|')) throw new Error('กรุณาเรียก setup ก่อน และอย่าแก้หัวคอลัมน์');
     const last = sheet.getLastRow();
     const rows = last > 1 ? sheet.getRange(2, 1, last - 1, HEADERS.length).getValues() : [];
     const found = rows.findIndex(row => String(row[0]) === p.date);
     if (found >= 0 && Number(rows[found][7]) >= p.snapshotAt) {
-      if (Number(rows[found][7]) === p.snapshotAt) return reply_({ ok: true, sheetId: SHEET_ID, date: p.date, snapshotAt: p.snapshotAt });
-      return reply_({ ok: false, error: 'stale' });
+      if (Number(rows[found][7]) === p.snapshotAt) return p;
+      throw new Error('มีสรุปที่ใหม่กว่าแล้ว กรุณาดึงใหม่');
     }
     const rowNumber = found >= 0 ? found + 2 : Math.max(2, last + 1);
     sheet.getRange(rowNumber, 1).setNumberFormat('@');
@@ -57,7 +71,6 @@ function doPost(e) {
     sheet.getRange(rowNumber, 1, 1, HEADERS.length).setValues([[p.date, p.bills, p.cash / 100, p.transfer / 100, p.total / 100, p.cancelled, Utilities.formatDate(new Date(p.snapshotAt), 'Asia/Bangkok', 'yyyy-MM-dd HH:mm:ss'), p.snapshotAt]]);
     sheet.getRange(rowNumber, 3, 1, 3).setNumberFormat('#,##0.00');
     SpreadsheetApp.flush();
-    return reply_({ ok: true, sheetId: SHEET_ID, date: p.date, snapshotAt: p.snapshotAt });
-  } catch (_) { return reply_({ ok: false, error: 'failed' }); }
-  finally { if (lock && lock.hasLock()) lock.releaseLock(); }
+    return p;
+  } finally { lock.releaseLock(); }
 }

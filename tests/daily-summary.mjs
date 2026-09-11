@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHmac } from 'node:crypto';
 import vm from 'node:vm';
 import { DatabaseSync } from 'node:sqlite';
-import { bangkokDayRange, DAILY_SUMMARY_SQL, SUMMARY_SHEET_ID, signSummary } from '../lib/daily-summary.ts';
+import { bangkokDayRange, DAILY_SUMMARY_SQL, SUMMARY_SHEET_ID, signSummary, verifySummaryRequest } from '../lib/daily-summary.ts';
 
 const range = bangkokDayRange('2026-09-11');
 assert.deepEqual(range, { start: '2026-09-10T17:00:00.000Z', end: '2026-09-11T17:00:00.000Z' });
@@ -34,7 +34,10 @@ const sheet = {
     setNumberFormat: () => {},
   }),
 };
+let responseData;
+let responseCode = 200;
 const context = vm.createContext({
+  UrlFetchApp: { fetch: (url, options) => { assert.ok(url.endsWith("/api/reports/sheets")); assert.equal(options.followRedirects, false); const b=JSON.parse(options.payload); assert.equal(b.signature, createHmac("sha256", secret).update(b.payload).digest("hex")); return { getResponseCode: () => responseCode, getContentText: () => JSON.stringify(responseData) }; } },
   console, Date, PropertiesService: { getScriptProperties: () => ({ getProperty: () => secret }) },
   Utilities: { Charset: { UTF_8: 'UTF-8' }, computeHmacSha256Signature: (p, s) => [...createHmac('sha256', s).update(p).digest()], formatDate: date => date.toISOString() },
   LockService: { getScriptLock: () => ({ tryLock: () => { held = true; return true; }, hasLock: () => held, releaseLock: () => { held = false; } }) },
@@ -44,25 +47,21 @@ const context = vm.createContext({
 vm.runInContext(readFileSync(new URL('../integrations/google-sheets/Code.gs', import.meta.url), 'utf8'), context);
 data.push(vm.runInContext('HEADERS.slice()', context));
 const summary = { version: 1, sheetId: SUMMARY_SHEET_ID, date: '2026-09-11', snapshotAt: Date.now() - 1000, ...totals, total: 8000 };
-async function send(p, badSignature = false) {
-  const payload = JSON.stringify(p);
-  const signature = badSignature ? '0'.repeat(64) : await signSummary(payload, secret);
-  return context.doPost({ postData: { contents: JSON.stringify({ payload, signature }) } });
-}
-assert.equal((await send(summary, true)).error, 'unauthorized');
-assert.equal(data.length, 1);
-assert.equal((await send(summary)).ok, true);
-assert.equal(data.length, 2);
-assert.deepEqual(Array.from(data[1].slice(0, 6)), ['2026-09-11', 2, 35, 45, 80, 1]);
-assert.equal((await send(summary)).ok, true);
-assert.equal(data.length, 2);
-assert.equal((await send({ ...summary, snapshotAt: summary.snapshotAt - 1 })).error, 'stale');
-assert.equal((await send({ ...summary, snapshotAt: Date.now() - 600000 })).error, 'expired');
-assert.equal((await send({ ...summary, total: 1 })).error, 'invalid');
-assert.equal((await send({ ...summary, sheetId: 'other' })).error, 'invalid');
-assert.equal((await send({ ...summary, cash: -1 })).error, 'invalid');
-assert.equal((await send({ ...summary, snapshotAt: summary.snapshotAt + 1, bills: 1, cancelled: 2, cash: 0, total: 4500 })).ok, true);
-assert.equal(data.length, 2);
-assert.equal(data[1][4], 45);
-assert.equal(held, false);
-console.log('PASS: Bangkok boundaries, cancelled bills, shop isolation, empty totals, signatures, replay, stale requests and date upsert');
+const requestBody = { action: 'read_daily_summary', sheetId: SUMMARY_SHEET_ID, date: '2026-09-11', timestamp: Date.now() };
+async function envelope(p, key=secret) { const payload=JSON.stringify(p); return JSON.stringify({payload, signature:await signSummary(payload,key)}); }
+assert.equal(await verifySummaryRequest(await envelope(requestBody), secret), requestBody.date);
+assert.equal(await verifySummaryRequest(await envelope(requestBody,'wrong'), secret), null);
+for(const change of [{timestamp:0},{sheetId:'other'},{action:'write'},{date:'2026-02-30'}]) assert.equal(await verifySummaryRequest(await envelope({...requestBody,...change}),secret), null);
+assert.equal(await verifySummaryRequest('garbage', secret),null);
+responseData={ok:true,...summary};
+context.pullSummary_('2026-09-11');
+assert.equal(data.length,2);
+assert.deepEqual(Array.from(data[1].slice(0,6)), ['2026-09-11',2,35,45,80,1]);
+context.pullSummary_('2026-09-11'); assert.equal(data.length,2);
+responseData={ok:true,...summary,snapshotAt:summary.snapshotAt-1}; assert.throws(()=>context.pullSummary_('2026-09-11'));
+responseData={ok:true,...summary,sheetId:'other'}; assert.throws(()=>context.pullSummary_('2026-09-11'));
+responseData={ok:true,...summary,total:1}; assert.throws(()=>context.pullSummary_('2026-09-11'));
+responseCode=503; assert.throws(()=>context.pullSummary_('2026-09-11')); responseCode=200;
+responseData={ok:true,...summary,snapshotAt:summary.snapshotAt+1,bills:1,cancelled:2,cash:0,total:4500}; context.pullSummary_('2026-09-11');
+assert.equal(data.length,2); assert.equal(data[1][4],45); assert.equal(held,false);
+console.log('PASS: Bangkok dates, cancellations, shop isolation, HMAC authentication, expiry, response validation, retry and upsert');
