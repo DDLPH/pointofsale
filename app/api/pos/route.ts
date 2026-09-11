@@ -1,4 +1,4 @@
-import { getChatGPTUser } from '@/app/chatgpt-auth';
+import { getStaff, SHOP_ID } from '@/lib/auth';
 import { database } from '@/lib/server-db';
 import { z } from 'zod';
 import {menuSeed, type Product, type Line} from '@/lib/pos';
@@ -7,17 +7,17 @@ const productInput=z.object({id:z.string().uuid(),name:z.string().trim().min(1).
 const saleInput=z.object({id:z.string().uuid(),method:z.enum(['cash','transfer']),received:z.number().int().min(0).max(100000000),items:z.array(z.object({productId:z.string().uuid(),price:z.number().int().positive(),qty:z.number().int().min(1).max(999),note:z.string().trim().max(150)})).min(1).max(100)});
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store'}});
 export async function GET(){
- try { const user=await getChatGPTUser();if(!user)return json({error:'กรุณาเข้าสู่ระบบ'},401);const db=database();
- const [p,o]=await Promise.all([db.prepare('SELECT id,name,price,category,active FROM products WHERE owner = ? ORDER BY category,name').bind(user.userId).all(),db.prepare('SELECT id,created,total,method,received,items,cancelled,reason FROM orders WHERE owner = ? ORDER BY created DESC').bind(user.userId).all()]);
+ try { const user=await getStaff();if(!user)return json({error:'กรุณาเข้าสู่ระบบ'},401);const db=database();
+ const [p,o]=await Promise.all([db.prepare('SELECT id,name,price,category,active FROM products WHERE owner = ? ORDER BY category,name').bind(SHOP_ID).all(),db.prepare('SELECT id,created,total,method,received,items,cancelled,reason FROM orders WHERE owner = ? ORDER BY created DESC').bind(SHOP_ID).all()]);
  return json({products:p.results,orders:o.results.map(r=>({...r,items:JSON.parse(r.items as string)}))});
  }catch(e){console.error('POS read',e);return json({error:'โหลดข้อมูลไม่ได้ กรุณาลองใหม่'},503);}
 }
 export async function POST(request:Request){
- try { const user=await getChatGPTUser();if(!user)return json({error:'กรุณาเข้าสู่ระบบ'},401);
+ try { const user=await getStaff();if(!user)return json({error:'กรุณาเข้าสู่ระบบ'},401);
  const origin=request.headers.get('origin');if(!origin||origin!==new URL(request.url).origin)return json({error:'คำขอไม่ถูกต้อง'},403);
- const db=database(),owner=user.userId;const body=z.object({action:z.string()}).passthrough().parse(await request.json());
- if(body.action==='seed'){const existing=await db.prepare('SELECT id FROM products WHERE owner = ? LIMIT 1').bind(owner).first();if(existing)return json({ok:true});await db.batch(menuSeed.map(p=>db.prepare('INSERT INTO products (id,owner,name,price,category,active) SELECT ?,?,?,?,?,1 WHERE NOT EXISTS (SELECT 1 FROM products WHERE owner = ? AND name = ?)').bind(crypto.randomUUID(),owner,p.name,p.price,p.category,owner,p.name)));return json({ok:true});}
- if(body.action==='product'){ const p=productInput.parse(body.product); await db.prepare('INSERT INTO products (id,owner,name,price,category,active) VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,price=excluded.price,category=excluded.category,active=excluded.active WHERE products.owner=excluded.owner').bind(p.id,owner,p.name,p.price,p.category,p.active).run();return json({ok:true}); }
+ const db=database(),owner=SHOP_ID;const body=z.object({action:z.string()}).passthrough().parse(await request.json());
+ if(body.action==='seed'){if(user.role!=='admin')return json({error:'สำหรับแอดมินเท่านั้น'},403);const existing=await db.prepare('SELECT id FROM products WHERE owner = ? LIMIT 1').bind(owner).first();if(existing)return json({ok:true});await db.batch(menuSeed.map(p=>db.prepare('INSERT INTO products (id,owner,name,price,category,active) SELECT ?,?,?,?,?,1 WHERE NOT EXISTS (SELECT 1 FROM products WHERE owner = ? AND name = ?)').bind(crypto.randomUUID(),owner,p.name,p.price,p.category,owner,p.name)));return json({ok:true});}
+ if(body.action==='product'){if(user.role!=='admin')return json({error:'สำหรับแอดมินเท่านั้น'},403); const p=productInput.parse(body.product); await db.prepare('INSERT INTO products (id,owner,name,price,category,active) VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,price=excluded.price,category=excluded.category,active=excluded.active WHERE products.owner=excluded.owner').bind(p.id,owner,p.name,p.price,p.category,p.active).run();return json({ok:true}); }
  if(body.action==='sale'){
  const s=saleInput.parse(body.sale);const existing=await db.prepare('SELECT id,owner FROM orders WHERE id = ?').bind(s.id).first();if(existing){if(existing.owner!==owner)return json({error:'เลขบิลซ้ำ'},409);return json({ok:true,id:s.id});}
  const result=await db.prepare('SELECT id,name,price,category,active FROM products WHERE owner = ?').bind(owner).all<Product>();const map=new Map(result.results.map(p=>[p.id,p]));const items:Line[]=[];
